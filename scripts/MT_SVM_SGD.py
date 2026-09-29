@@ -13,7 +13,7 @@ from sklearn.preprocessing import StandardScaler
 from time import time
 from datetime import datetime, timezone
 
-from _MT_functions import compute_bold_files, get_subjects
+from _MT_functions import get_subjects
 
 # %% --- Handle Arguments -------------------------------------------------------------------------
 
@@ -32,7 +32,7 @@ ap.add_argument("--verbose", default=False, required=False)
 # %%
 
 # parameters for function
-str_data_path = "/home/daniel/Desktop/Python/Data/MRI/HCP_AWS"
+str_data_path = "/home/daniel/Desktop/Python/MasterThesis/data"
 str_data_type = "bold"
 flo_train_size = 0.8
 verbose = False
@@ -42,8 +42,6 @@ flo_signal = 0.1
 
 
 # %%
-
-compute_bold_files(data_path=str_data_path, boo_standardize=False, verbose=False, force_new_files=False)
 
 lis_subjects = get_subjects(data_path=str_data_path)
 
