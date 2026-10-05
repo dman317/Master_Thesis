@@ -58,7 +58,7 @@ def get_hardware():
 
 # %%
 
-def get_subjects(data_path:str, flo_ratio_subjects:float=1, boo_verbose:bool=False)->list:
+def get_subjects(data_path:str, flo_ratio_subjects:float=1)->list:
 
     if flo_ratio_subjects < 0.1 or flo_ratio_subjects > 1:
 
@@ -66,27 +66,23 @@ def get_subjects(data_path:str, flo_ratio_subjects:float=1, boo_verbose:bool=Fal
 
     from numpy import round
     from numpy.random import shuffle
-    from os import listdir
+    from pathlib import Path
 
-    #data_path = "/home/daniel/Desktop/Python/Data/MRI/HCP_AWS" 
-    #boo_verbose = True
-    #flo_ratio_subjects = .8
+    pat_subjects = Path(data_path)
 
-    lis_subjects_full = [x for x in listdir(data_path) if x.startswith("sub-")]
+    lis_subjects = [subject for subject in pat_subjects.iterdir() if subject.stem.isdigit() or subject.name.startswith("sub-")]
 
-    int_subjects_total = len(lis_subjects_full)
+    int_subjects_total = len(lis_subjects)
     int_subjects_part = int(round(flo_ratio_subjects * int_subjects_total))
 
-    lis_subjects_new = lis_subjects_full[:int_subjects_part]
+    lis_subjects_new = lis_subjects[:int_subjects_part]
 
-    if boo_verbose:
+    print(f"Subjects total: {f"{int_subjects_total:>3}"}")
+    print(f"Subjects_ratio: {f"{int((flo_ratio_subjects*100)):3}"}%")
+    print(f"Subjects new: {f"{int_subjects_part:>5}"}")
+    print("")
 
-        print(f"Subjects total: {f"{int_subjects_total:>3}"}")
-        print(f"Subjects_ratio: {f"{int((flo_ratio_subjects*100)):3}"}%")
-        print(f"Subjects new: {f"{int_subjects_part:>5}"}")
-        print("")
-
-    return lis_subjects_new
+    return lis_subjects
 
 # -------------------------------------------------------------------------------------------------
 # -------------------------------------------------------------------------------------------------
