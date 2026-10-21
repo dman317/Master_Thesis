@@ -2,16 +2,15 @@
 # %% --- Load Modules -----------------------------------------------------------------------------
 
 import argparse
-from numpy import array, ceil, round, concatenate, load, mean, append
+from numpy import array, ceil, round, concatenate, load as np_load, mean, append
 from numpy.random import shuffle
-from os import listdir
-from os.path import join
 from sklearn.linear_model import SGDClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
 from time import time
 from datetime import datetime, timezone
+from pathlib import Path
+from regex import search
 
 from _MT_functions import get_subjects
 
@@ -32,54 +31,98 @@ ap.add_argument("--verbose", default=False, required=False)
 # %%
 
 # parameters for function
-str_data_path = "/home/daniel/Desktop/Python/MasterThesis/data"
+pat_data = Path("/home/daniel/Desktop/Python/MasterThesis/data")
 str_data_type = "bold"
 flo_train_size = 0.8
 verbose = False
 int_progress_bar_size = 4
 int_random_state = 42
+int_epochs = 25
 flo_signal = 0.1
 
+lis_train_data_tasks = ["EMOTION"]
+lis_test_data_tasks = ["EMOTION"]
+
+boo_test_on_pretrain_data = False
+boo_test_on_independent_data = False
+
+#TODO make sure logic is correct
+if lis_train_data_tasks == lis_test_data_tasks:
+
+    boo_test_on_pretrain_data = True
+
+elif lis_train_data_tasks not in lis_test_data_tasks:
+
+    boo_test_on_independent_data = True
+
+else:
+
+    raise ValueError("lol") #FIXME correct error and message
 
 # %%
 
-lis_subjects = get_subjects(data_path=str_data_path)
+lis_subjects = get_subjects(pat_data=pat_data)
 
 lis_train_subjects, lis_test_subjects = train_test_split(lis_subjects, train_size=flo_train_size, random_state=int_random_state)
 
 lis_train_files = []
 lis_test_files = []
 
-for subject in lis_subjects:
+for pat_subject in lis_subjects:
+
+    pat_subject_func = pat_subject/"func"
 
     if str_data_type == "bold":
 
-        str_subject_path = join(str_data_path, subject, "func/")
-        lis_subject_files = [x for x in listdir(path=str_subject_path) if x.endswith("bold.npz")]
+        pat_subject_func_bold = pat_subject_func/"bold_files"
+        lis_subject_files = [x for x in pat_subject_func_bold.iterdir() if x.name.endswith("bold.npz")]
+
+        if pat_subject in lis_train_subjects:
+
+            for train_data_task in lis_train_data_tasks:
+
+                lis_matches = [pat_file for pat_file in lis_subject_files if search(pattern=train_data_task, string=pat_file.name)]
+
+                lis_train_files += lis_matches
+
+        if pat_subject in lis_test_subjects:
+
+            for test_data_task in lis_test_data_tasks:
+
+                lis_matches = [pat_file for pat_file in lis_subject_files if search(pattern=test_data_task, string=pat_file.name)]
+
+                lis_test_files += lis_matches
 
     if str_data_type == "betas":
 
-        str_subject_path = join(str_data_path, subject, "func", "betas")
-        lis_subject_files = [x for x in listdir(str_subject_path) if x.endswith("betas.npz")]
+        pat_subject_func_betas = pat_subject_func/"beta_files"
+        lis_subject_files = [pat_file for pat_file in pat_subject_func_betas.iterdir() if pat_file.name.endswith("betas.pt")]
 
-    for file in lis_subject_files:
+        if pat_subject in lis_train_subjects:
 
-        if subject in lis_train_subjects:
+            for train_data_task in lis_train_data_tasks:
 
-            lis_train_files.append(file)
+                lis_matches = [pat_file for pat_file in lis_subject_files if search(pattern=train_data_task, string=pat_file)]
 
-        if subject in lis_test_subjects:
+                lis_train_files += lis_matches
 
-            lis_test_files.append(file)
+        if pat_subject in lis_test_subjects:
+
+            for test_data_task in lis_test_data_tasks:
+
+                lis_matches = [pat_file for pat_file in lis_subject_files if search(test_data_task, string=pat_file)]
+
+                lis_test_files += lis_matches
+
+# %%
 
 class DataLoader:
 
-    def __init__(self, files:list, batch_size:int = 4, shuffle_data:bool = True, boo_standardize:bool=True):
+    def __init__(self, files:list, batch_size:int = 4, shuffle_data:bool = True):
 
         self.files = files
         self.batch_size = batch_size
         self.shuffle_data = shuffle_data
-        self.standardize = boo_standardize
 
         if self.shuffle_data:
 
@@ -96,24 +139,9 @@ class DataLoader:
             lis_batch_data = []
             lis_batch_labels = []
 
-            for file in batch_files:
+            for pat_file in batch_files:
 
-                str_subject = file.split("_")[0]
-
-                if str_data_type == "bold":
-
-                    str_file_path = join(str_data_path, f"{str_subject}", "func", file)
-
-                if str_data_type == "betas":
-
-                    str_file_path = join(str_data_path, f"{str_subject}", "func", "betas", file)
-
-                with load(str_file_path) as file:
-
-                    if self.standardize:
-
-                        scaler = StandardScaler()
-                        scaler.fit_transform(file["data"])
+                with np_load(pat_file, allow_pickle=True) as file:
 
                     lis_batch_data.append(file["data"])
 
@@ -131,14 +159,14 @@ class DataLoader:
 
             yield arr_batch_data, arr_batch_labels
 
-dl_train_dataloader = DataLoader(files=lis_train_files, batch_size=1, shuffle_data=True, boo_standardize=True)
-dl_test_dataloader = DataLoader(files=lis_test_files, batch_size=1, shuffle_data=True, boo_standardize=True)
+dl_train_dataloader = DataLoader(files=lis_train_files, batch_size=1, shuffle_data=True)
+dl_test_dataloader = DataLoader(files=lis_test_files, batch_size=1, shuffle_data=True)
+
+#next(iter(dl_train_dataloader))
 
 # remember: batch_size = 1 for bold means shape(143,xxx) and for betas means shape(1,xxx)
  
 # %%
-
-int_epochs = 3
 
 sgd_partial = SGDClassifier(loss="hinge", penalty="l2", learning_rate="optimal" , random_state=42)
 

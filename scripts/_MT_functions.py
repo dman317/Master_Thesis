@@ -56,9 +56,15 @@ def get_hardware():
 
     return str_mainboard_vendor + ";" + str_mainboard_model + ";" + str_mainboard_version
 
-# %%
+# -------------------------------------------------------------------------------------------------
 
-def get_subjects(data_path:str, flo_ratio_subjects:float=1)->list:
+def get_runs():
+
+    return ["LR", "RL"]
+
+# -------------------------------------------------------------------------------------------------
+
+def get_subjects(pat_data:str, flo_ratio_subjects:float=1)->list:
 
     if flo_ratio_subjects < 0.1 or flo_ratio_subjects > 1:
 
@@ -68,182 +74,115 @@ def get_subjects(data_path:str, flo_ratio_subjects:float=1)->list:
     from numpy.random import shuffle
     from pathlib import Path
 
-    pat_subjects = Path(data_path)
 
-    lis_subjects = [subject for subject in pat_subjects.iterdir() if subject.stem.isdigit() or subject.name.startswith("sub-")]
+    lis_subjects = [subject for subject in pat_data.iterdir() if subject.stem.isdigit() or subject.name.startswith("sub-")]
 
     int_subjects_total = len(lis_subjects)
     int_subjects_part = int(round(flo_ratio_subjects * int_subjects_total))
 
     lis_subjects_new = lis_subjects[:int_subjects_part]
 
-    print(f"Subjects total: {f"{int_subjects_total:>3}"}")
-    print(f"Subjects_ratio: {f"{int((flo_ratio_subjects*100)):3}"}%")
-    print(f"Subjects new: {f"{int_subjects_part:>5}"}")
-    print("")
+    #print(f"Subjects total: {f"{int_subjects_total:>3}"}")
+    #print(f"Subjects_ratio: {f"{int((flo_ratio_subjects*100)):3}"}%")
+    #print(f"Subjects new: {f"{int_subjects_part:>5}"}")
+    #print("")
 
     return lis_subjects
 
 # -------------------------------------------------------------------------------------------------
-# -------------------------------------------------------------------------------------------------
+
+def get_tasks():
+
+    return ["EMOTION", "GAMBLING", "LANGUAGE", "MOTOR", "RELATIONAL", "SOCIAL", "WM"]
+
 # -------------------------------------------------------------------------------------------------
 
-def get_mask_intersect(data_path:str, force_new_file:bool=False):
+def get_codes():
+
+    dic_codes = {"neut":0, "fear":1, "loss_event":2, "win_event":3, "neut_event":4, "story":5, "math":6, "rh":7, "lf":8, "t":9,
+                 "rf":10, "lh":11, "relation":12, "match":13, "mental":14, "rnd":15, "2bk_tools":16, "0bk_body":17, "2bk_faces":18,
+                 "0bk_tools":19, "2bk_body":20, "2bk_places":21, "0bk_faces":22, "0bk_places":23}
+
+    return dic_codes
+
+# -------------------------------------------------------------------------------------------------
+
+def compute_masks_intersect(pat_data:str, boo_force_new_files:bool=False):
 
     from nibabel import save as save_img
     from nilearn.image import load_img
     from nilearn.masking import intersect_masks
-    import os
+    from pathlib import Path
 
-    from scripts._MT_functions import get_subjects
+    from _MT_functions import get_subjects
 
-    lis_subjects = get_subjects(data_path=data_path)
-    lis_runs = ["LR", "RL"]
-    str_mask_name = "brain_mask_intersect.nii.gz"
-    str_mask_path = os.path.join(data_path, str_mask_name)
+    #pat_data = Path("/home/daniel/Desktop/Python/MasterThesis/data_raw")
+    #boo_force_new_files = False
 
-    if not os.path.isfile(str_mask_path) or force_new_file:
+    lis_subjects = get_subjects(pat_data=pat_data)
+    lis_tasks = get_tasks()
+    lis_runs = get_runs()
+    lis_task_masks_intersect = []
+    pat_mask_all = pat_data/f"task-ALL_space-MNI152NLin6Asym_res-2_desc-preproc_brain_mask_intersect.nii.gz"
+    str_mask_all = pat_mask_all.name
 
-        print(f"Could not find mask!")
-        print("Computing new mask...", end="\r")
-
-        lis_subjects_masks = []
-
-        for str_subject in lis_subjects:
-
-            for str_run in lis_runs:
-
-                img_subject_run_mask = load_img(f"{data_path}/{str_subject}/func/{str_subject}_task-EMOTION_run-{str_run}_space-MNI152NLin6Asym_res-2_desc-preproc_brain_mask.nii.gz")
-
-                lis_subjects_masks.append(img_subject_run_mask)
-
-        img_mask_intersect = intersect_masks(mask_imgs=lis_subjects_masks, threshold=1)
-
-        print("Computing new mask...done!")
-        
-        print(f"Saving mask...", end="\r")
-
-        save_img(img=img_mask_intersect, filename=os.path.join(data_path, str_mask_name))
-
-        print(f"Saving mask...done!")
-        print("")
-
-    return load_img(str_mask_path)
-
-# -------------------------------------------------------------------------------------------------
-# -------------------------------------------------------------------------------------------------
-# -------------------------------------------------------------------------------------------------
-
-def compute_synthetic_data(data_path:str, n_files:int=143,
-                           flo_signal_strength:float=.6, flo_noise_low:float=.1, flo_noise_high:float=.2,
-                           boo_standardize:bool=True, force_new_files:bool=False):
-
-    from nibabel import Nifti1Image
-    from nilearn.datasets import fetch_atlas_harvard_oxford
-    from nilearn.image import concat_imgs, load_img, math_img
-    from nilearn.masking import apply_mask
-    from numpy import savez_compressed
-    from numpy.random import uniform
-    from os.path import isfile, join
-    from sklearn.preprocessing import StandardScaler
-
-    from scripts._MT_functions import get_mask_intersect, get_subjects
-
-    lis_runs = ["LR", "RL"]
-
-    lis_subjects = get_subjects(data_path=data_path)
-    img_mask = get_mask_intersect(data_path=data_path)
-
-    # --- Handle the Masks for Condition 1&2
-
-    dic_atlas = fetch_atlas_harvard_oxford(data_dir="/home/daniel/Desktop/Python/Data/MRI/atlases", atlas_name="cort-maxprob-thr25-2mm")
-    img_atlas = load_img(dic_atlas["maps"])
-    df_atlas_labels = dic_atlas["lut"]
-
-    dic_masks = {}
-
-    for i_row, row in df_atlas_labels.iterrows():
-
-        dic_masks[row["name"]] = math_img(formula=f"img01 == {row["index"]}", img01 = img_atlas)
-
-    img_mask_roi_cond01 = load_img(dic_masks["Frontal Pole"])
-    arr_mask_roi_cond01_fdata = img_mask_roi_cond01.get_fdata()
-
-    img_mask_roi_cond02 = load_img(dic_masks["Occipital Pole"])
-    arr_mask_roi_cond02_fdata = img_mask_roi_cond02.get_fdata()
-
-    # --- Check if File Already Exists ------------------
-
-    boo_files_missing = False
-    lis_missing_files = []
-
-    print("Checking for missing files...")
+    print(f"Path: {pat_data}")
     print("")
 
-    for str_subject in lis_subjects:
+    for str_task in lis_tasks:
 
-        str_subject_path = join(data_path, str_subject, "func")
+        str_mask_name = f"task-{str_task}_space-MNI152NLin6Asym_res-2_desc-preproc_brain_mask_intersect.nii.gz"
+        pat_mask_file = pat_data/str_mask_name
 
-        for str_run in lis_runs:
+        if not pat_mask_file.is_file() or boo_force_new_files:
 
-            str_file_name = f"{str_subject}_run-{str_run}_space-MNI152_noise-low-{flo_noise_low}_noise-high-{flo_noise_high}_signal-{flo_signal_strength}_synth.npz"
-            str_file_path = join(str_subject_path, str_file_name)
+            print(f"{f"{str_mask_name:<88}"}\033[91mFILE MISSING\033[0m", end="\r")
 
-            if not isfile(str_file_path) or force_new_files:
+            lis_task_masks = []
 
-                # --- Compute File --------------
+            for pat_subject in lis_subjects:
 
-                boo_files_missing = True
-                lis_missing_files.append(str_file_path)
+                str_subject = pat_subject.name
 
-                print(f"File '{str_file_name}' not found!")
-                print("Commencing computation...", end="\r")
+                for str_run in lis_runs:
 
-                lis_imgs = []
-                lis_labels = []
+                    img_subject_run_mask = load_img(pat_data/str_subject/"func"/f"{str_subject}_task-{str_task}_run-{str_run}_space-MNI152NLin6Asym_res-2_desc-preproc_brain_mask.nii.gz")
 
-                for i_file in range(int(n_files/2)):  #TODO make sure len is same as real data (total number)
+                    lis_task_masks.append(img_subject_run_mask)
 
-                    arr_volume_cond01 = uniform(low=flo_noise_low, high=flo_noise_high, size=img_mask.shape)
-                    arr_volume_cond01[arr_mask_roi_cond01_fdata > 0] += flo_signal_strength
-                    img_cond01 = Nifti1Image(dataobj=arr_volume_cond01, affine=img_mask.affine)
+            img_mask_intersect = intersect_masks(mask_imgs=lis_task_masks, threshold=1)
 
-                    lis_imgs.append(img_cond01)
-                    lis_labels.append(0)
+            lis_task_masks.append(img_mask_intersect)
+            
+            save_img(img=img_mask_intersect, filename=pat_mask_file)
 
-                    arr_volume_cond02 = uniform(low=flo_noise_low, high=flo_noise_high, size=img_mask.shape)
-                    arr_volume_cond02[arr_mask_roi_cond02_fdata > 0] += flo_signal_strength
-                    img_cond02 = Nifti1Image(dataobj=arr_volume_cond02, affine=img_mask.affine)
+            print(f"{f"{str_mask_name:<88}"}\033[92mfile created\033[0m")
 
-                    lis_imgs.append(img_cond02)
-                    lis_labels.append(1)
-                
-                img_data = concat_imgs(lis_imgs)
-                img_data_masked = apply_mask(imgs=img_data, mask_img=img_mask)
+        else:
 
-                if boo_standardize:
+            print(f"{f"{str_mask_name:<88}"}\033[92mfile found\033[0m")
 
-                    scaler = StandardScaler()
-                    img_data_masked = scaler.fit_transform(img_data_masked)
-                
-                print("Commencing computation...done!")
+    print("")
 
-                savez_compressed(file=str_file_path, data=img_data_masked, labels=lis_labels)
+    if not pat_mask_all.is_file():
 
-                print(f"Saved file at {str_file_path}")
-                print("")
-    
-    if not boo_files_missing:
+        print(f"{f"{str_mask_all:<88}"}\033[91mFILE MISSING\033[0m", end="\r")
 
-        print("All files have been found!")
-        print("")
+        lis_task_masks_intersect = [mask for mask in pat_data.iterdir() if mask.name.endswith("intersect.nii.gz")]
+
+        img_all_masks_intersect = intersect_masks(lis_task_masks_intersect, threshold=1)
+
+        save_img(img=img_all_masks_intersect, filename=pat_mask_all)
+
+        print(f"{f"{str_mask_all:<88}"}\033[92mfile created\033[0m")
 
     else:
 
-        print(f"{len(lis_missing_files)} files have been computed.")
-        print("All files have been found!")
-        print("")
+        print(f"{f"{str_mask_all:<88}"}\033[92mfile found\033[0m")
 
+    print("")
+    print("-"*100)
+    print("")
 
 # %% ----------------------------------------------------------------------------------------------
 
@@ -459,4 +398,21 @@ def progress_bar(int_n_train_batch, int_progress_bar_size, int_n_train_batches, 
     str_train_progress_bar = "[" + "▌" * int_batch_batches_ratio  + "." * ((int_progress_bar_size*10) - int_batch_batches_ratio) + "]"
 
     return str_train_progress_bar
-    
+
+# %%
+
+def get_longest_file_name(lis_files:list)->tuple[str, int]:
+
+    str_longest_file_name = ""
+
+    for str_file in lis_files:
+
+        if len(str_file) > len(str_longest_file_name):
+
+            str_longest_file_name = str_file
+
+    int_len_longest_file_name = len(str_longest_file_name)
+
+    return str_longest_file_name, int_len_longest_file_name
+
+# %%
