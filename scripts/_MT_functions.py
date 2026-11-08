@@ -1,3 +1,30 @@
+
+def get_arguments():
+
+    from argparse import ArgumentParser
+    from pathlib import Path
+
+    ap = ArgumentParser(description="???")
+
+    ap.add_argument("--pat_data", required=False, default=Path(__file__).parent.parent/"data", help="???")
+    ap.add_argument("--str_data_type", required=False, default="bold", help="???")
+    ap.add_argument("--lis_tasks_train", required=False, default=["EMOTION", "GAMBLING", "LANGUAGE", "MOTOR", "RELATIONAL", "SOCIAL"], nargs="+", help="???")
+    ap.add_argument("--lis_tasks_test", required=False, default=["EMOTION"], nargs="+", help="???")
+    ap.add_argument("--int_n_subjects_train", required=False, default=2, type=int, help="???")
+    ap.add_argument("--int_n_subjects_test", required=False, default=1, type=int, help="???")
+    ap.add_argument("--int_epochs", required=False, default=3, type=int, help="???")
+    ap.add_argument("--int_batch_size_train", required=False, default=16, type=int, help="???")
+    ap.add_argument("--int_batch_size_test", required=False, default=1, type=int, help="???")
+    ap.add_argument("--int_progress_bar_size", required=False, default=4, type=int, help="???")
+    ap.add_argument("--int_seed", required=False, default=42, type=int, help="???")
+    ap.add_argument("--int_n_jobs", required=False, default=-1, type=int, help="???")
+    ap.add_argument("--flo_learning_rate", required=False, default=0.001, help="CNN ONLY")
+    ap.add_argument("--flo_dropout", required=False, default=0.2, help="CNN ONLY")
+
+    return ap.parse_args()
+
+# -------------------------------------------------------------------------------------------------
+
 def get_hardware():
 
     # --- CPU -------------------------------------------------------------------------------------
@@ -52,8 +79,6 @@ def get_hardware():
 
     # --- RAM -------------------------------------------------------------------------------------
 
-    
-
     return str_mainboard_vendor + ";" + str_mainboard_model + ";" + str_mainboard_version
 
 # -------------------------------------------------------------------------------------------------
@@ -64,30 +89,40 @@ def get_runs():
 
 # -------------------------------------------------------------------------------------------------
 
-def get_subjects(pat_data:str, flo_ratio_subjects:float=1)->list:
+def get_settings_summary(args, int_n_subjects_total, lis_classes_train, pat_results):
 
-    if flo_ratio_subjects < 0.1 or flo_ratio_subjects > 1:
+    dic_codes = get_codes()
+    dic_conditions = get_conditions()
 
-        raise ValueError("'flo_ratio_subjects must be >= 0.1 and <= 1")
+    print("")
+    print(f"\033[1mPaths\033[0m")
+    print(f"Subjects: {args.pat_data}")
+    print(f"Results: {pat_results}")  
+    print("")
+    print("\033[1mSubjects\33[0m")
+    print(f"Total: {int_n_subjects_total}")
+    print(f"Training: {args.int_n_subjects_train}")
+    print(f"Testing: {args.int_n_subjects_test}")
+    print("")
+    print("\033[1mTasks:\033[0m")
+    print(f"Training: {args.lis_tasks_train}")
+    print(f"Testing: {args.lis_tasks_test}")
+    print(f"Categories: {len(lis_classes_train)}")
+    print(f"Chance Level: {100*(1/len(lis_classes_train))}%")
+    print("")
+    print("\33[1mParameters:\033[0m")
+    print(f"Epochs: {args.int_epochs}")
+    print(f"Batch size training: {args.int_batch_size_train}")
+    print(f"Batch size testing: {args.int_batch_size_test}")
+    print(f"N_jobs: {args.int_n_jobs}")
+    print(f"Random state: {args.int_seed}")
+    print("")
 
-    from numpy import round
-    from numpy.random import shuffle
-    from pathlib import Path
+# -------------------------------------------------------------------------------------------------
 
+def get_subjects(pat_data:str)->list:
 
-    lis_subjects = [subject for subject in pat_data.iterdir() if subject.stem.isdigit() or subject.name.startswith("sub-")]
-
-    int_subjects_total = len(lis_subjects)
-    int_subjects_part = int(round(flo_ratio_subjects * int_subjects_total))
-
-    lis_subjects_new = lis_subjects[:int_subjects_part]
-
-    #print(f"Subjects total: {f"{int_subjects_total:>3}"}")
-    #print(f"Subjects_ratio: {f"{int((flo_ratio_subjects*100)):3}"}%")
-    #print(f"Subjects new: {f"{int_subjects_part:>5}"}")
-    #print("")
-
-    return lis_subjects
+    return  [subject for subject in pat_data.iterdir() if subject.stem.isdigit() or subject.name.startswith("sub-")]
 
 # -------------------------------------------------------------------------------------------------
 
@@ -100,10 +135,18 @@ def get_tasks():
 def get_codes():
 
     dic_codes = {"neut":0, "fear":1, "loss_event":2, "win_event":3, "neut_event":4, "story":5, "math":6, "rh":7, "lf":8, "t":9,
-                 "rf":10, "lh":11, "relation":12, "match":13, "mental":14, "rnd":15, "2bk_tools":16, "0bk_body":17, "2bk_faces":18,
-                 "0bk_tools":19, "2bk_body":20, "2bk_places":21, "0bk_faces":22, "0bk_places":23}
+                 "rf":10, "lh":11, "relation":12, "match":13, "mental":14, "rnd":15, "tools":16, "body":17, "faces":18, "places":20}
 
     return dic_codes
+
+# -------------------------------------------------------------------------------------------------
+
+def get_conditions():
+
+    dic_conditions = {"EMOTION": ["neut", "fear"], "GAMBLING": ["loss_event", "win_event", "neut_event"], "LANGUAGE": ["story", "math"], 
+                     "MOTOR": ["rh", "lf", "t", "rf", "lh"], "RELATIONAL": ["relation", "match"], "SOCIAL": ["mental", "rnd"], "WM": ["tools", "body", "faces", "places"]}
+
+    return dic_conditions
 
 # -------------------------------------------------------------------------------------------------
 
@@ -399,7 +442,7 @@ def progress_bar(int_n_train_batch, int_progress_bar_size, int_n_train_batches, 
 
     return str_train_progress_bar
 
-# %%
+# %% ----------------------------------------------------------------------------------------------
 
 def get_longest_file_name(lis_files:list)->tuple[str, int]:
 
@@ -415,4 +458,60 @@ def get_longest_file_name(lis_files:list)->tuple[str, int]:
 
     return str_longest_file_name, int_len_longest_file_name
 
-# %%
+# %% ----------------------------------------------------------------------------------------------
+
+def get_classes_training():
+
+    args = get_arguments()
+    dic_conditions = get_conditions()
+    dic_codes = get_codes()
+
+    lis_classes_train = []
+
+    for str_key in args.lis_tasks_train:
+
+        lis_classes_train = lis_classes_train + dic_conditions[str_key]
+
+    lis_classes_coded_train = [dic_codes[x] for x in lis_classes_train]
+
+    return lis_classes_train, lis_classes_coded_train
+
+# %% ----------------------------------------------------------------------------------------------
+
+def get_split_files():
+
+    args = get_arguments()
+    lis_subjects = get_subjects(args.pat_data)
+
+    from sklearn.model_selection import train_test_split
+
+    lis_subjects_train, lis_subjects_test = train_test_split(lis_subjects, train_size=args.int_n_subjects_train, test_size=args.int_n_subjects_test, random_state=args.int_seed)
+
+    lis_files_train = []
+    lis_files_test = []
+
+    from regex import search
+
+    for pat_subject in lis_subjects:
+
+        if args.str_data_type == "bold":
+
+            lis_subject_files = [x for x in (pat_subject/"func"/"bold_files").iterdir() if x.name.endswith("bold.npz")]
+
+            if pat_subject in lis_subjects_train:
+
+                for str_task in args.lis_tasks_train:
+
+                    lis_matches = [pat_file for pat_file in lis_subject_files if search(pattern=str_task, string=pat_file.name)]
+
+                    lis_files_train += lis_matches
+
+            if pat_subject in lis_subjects_test:
+
+                for str_task in args.lis_tasks_test:
+
+                    lis_matches = [pat_file for pat_file in lis_subject_files if search(pattern=str_task, string=pat_file.name)]
+
+                    lis_files_test += lis_matches
+
+    return lis_files_train, lis_files_test, lis_subjects_train, lis_subjects_test

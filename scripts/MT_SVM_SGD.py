@@ -1,136 +1,63 @@
 
 # %% --- Load Modules -----------------------------------------------------------------------------
 
-import argparse
-from numpy import array, ceil, round, concatenate, load as np_load, mean, append
-from numpy.random import shuffle
-from sklearn.linear_model import SGDClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from sklearn.model_selection import train_test_split
-from time import time
-from datetime import datetime, timezone
-from pathlib import Path
-from regex import search
+print("Loading modules")
 
-from _MT_functions import get_subjects
+from itertools import zip_longest
+from numpy import ceil, round, concatenate, load as np_load
+from numpy.random import default_rng
+from sklearn.linear_model import SGDClassifier
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, precision_score, recall_score, f1_score
+from time import perf_counter
+from datetime import datetime
+from pandas import DataFrame
+from pickle import dump
+import numpy as np
+
+from _MT_functions import get_arguments, get_classes_training, get_settings_summary, get_subjects, get_split_files
+
+flo_time_total_start = perf_counter()
 
 # %% --- Handle Arguments -------------------------------------------------------------------------
 
-ap = argparse.ArgumentParser()
+print("Getting the arguments")
 
-ap.add_argument("--files", required=True)
-ap.add_argument("--force_recompute_files", default=False, required=False)
-ap.add_argument("--verbose", default=False, required=False)
+args = get_arguments()
 
-#args = ap.parse_args()
+# %% --- Split Subjects Into Training- and Test-Set -----------------------------------------------
 
-#str_files_path = str(args.files)
-#boo_force_recompute_files = bool(args.force_recompute_files)
-#boo_verbose = bool(args.verbose)
+lis_subjects = get_subjects(pat_data=args.pat_data)
+int_n_subjects_total = len(lis_subjects)
 
-# %%
+lis_files_train, lis_files_test, lis_subjects_train, lis_subjects_test = get_split_files()
+int_subjects_train_percent = int(100*(len(lis_subjects_train)/400)) # 400 -> max. number of training subjects
 
-# parameters for function
-pat_data = Path("/home/daniel/Desktop/Python/MasterThesis/data")
-str_data_type = "bold"
-flo_train_size = 0.8
-verbose = False
-int_progress_bar_size = 4
-int_random_state = 42
-int_epochs = 25
-flo_signal = 0.1
+pat_results_svm = args.pat_data.parent/"results"/"SVM"
 
-lis_train_data_tasks = ["EMOTION"]
-lis_test_data_tasks = ["EMOTION"]
+df_results = DataFrame(columns=["Epoch", "Accuracy_Train", "Accuracy_Test", "Balanced_Accuracy_Train", "Balanced_Accuracy_Test", "Precision_Train", "Precision_Test", "Recall_Train", "Recall_Test", "F1-Score_Train", "F1-Score_Test"])
+df_subjects = DataFrame(zip_longest(lis_subjects_train, lis_subjects_test), columns=["Train", "Test"])
 
-boo_test_on_pretrain_data = False
-boo_test_on_independent_data = False
+rng = default_rng(seed=args.int_seed)
 
-#TODO make sure logic is correct
-if lis_train_data_tasks == lis_test_data_tasks:
+# %% --- Setup the Dataloader ---------------------------------------------------------------------
 
-    boo_test_on_pretrain_data = True
-
-elif lis_train_data_tasks not in lis_test_data_tasks:
-
-    boo_test_on_independent_data = True
-
-else:
-
-    raise ValueError("lol") #FIXME correct error and message
-
-# %%
-
-lis_subjects = get_subjects(pat_data=pat_data)
-
-lis_train_subjects, lis_test_subjects = train_test_split(lis_subjects, train_size=flo_train_size, random_state=int_random_state)
-
-lis_train_files = []
-lis_test_files = []
-
-for pat_subject in lis_subjects:
-
-    pat_subject_func = pat_subject/"func"
-
-    if str_data_type == "bold":
-
-        pat_subject_func_bold = pat_subject_func/"bold_files"
-        lis_subject_files = [x for x in pat_subject_func_bold.iterdir() if x.name.endswith("bold.npz")]
-
-        if pat_subject in lis_train_subjects:
-
-            for train_data_task in lis_train_data_tasks:
-
-                lis_matches = [pat_file for pat_file in lis_subject_files if search(pattern=train_data_task, string=pat_file.name)]
-
-                lis_train_files += lis_matches
-
-        if pat_subject in lis_test_subjects:
-
-            for test_data_task in lis_test_data_tasks:
-
-                lis_matches = [pat_file for pat_file in lis_subject_files if search(pattern=test_data_task, string=pat_file.name)]
-
-                lis_test_files += lis_matches
-
-    if str_data_type == "betas":
-
-        pat_subject_func_betas = pat_subject_func/"beta_files"
-        lis_subject_files = [pat_file for pat_file in pat_subject_func_betas.iterdir() if pat_file.name.endswith("betas.pt")]
-
-        if pat_subject in lis_train_subjects:
-
-            for train_data_task in lis_train_data_tasks:
-
-                lis_matches = [pat_file for pat_file in lis_subject_files if search(pattern=train_data_task, string=pat_file)]
-
-                lis_train_files += lis_matches
-
-        if pat_subject in lis_test_subjects:
-
-            for test_data_task in lis_test_data_tasks:
-
-                lis_matches = [pat_file for pat_file in lis_subject_files if search(test_data_task, string=pat_file)]
-
-                lis_test_files += lis_matches
-
-# %%
+print("Seting up the dataloader")
 
 class DataLoader:
 
-    def __init__(self, files:list, batch_size:int = 4, shuffle_data:bool = True):
+    def __init__(self, files:list, batch_size:int = 1, shuffle_data:bool = True):
 
         self.files = files
         self.batch_size = batch_size
         self.shuffle_data = shuffle_data
 
-        if self.shuffle_data:
-
-            shuffle(self.files)
-
         self.len_files = len(self.files)
     
     def __iter__(self):
+
+        if self.shuffle_data:
+
+            rng.shuffle(self.files)
 
         for batch_start in range(0, self.len_files, self.batch_size):
 
@@ -144,130 +71,212 @@ class DataLoader:
                 with np_load(pat_file, allow_pickle=True) as file:
 
                     lis_batch_data.append(file["data"])
-
-                    # TODO works but make the way it deals with beta labels and bold labels less ugly, maybe change the way labels are saved
-                    if str_data_type == "bold":
-
-                        lis_batch_labels.append(file["labels"])
-
-                    if str_data_type == "betas":
-
-                        lis_batch_labels.append([file["labels"].item()])
+                    lis_batch_labels.append(file["labels"])
 
             arr_batch_data = concatenate(lis_batch_data, axis=0)
             arr_batch_labels = concatenate(lis_batch_labels, axis=0)
 
             yield arr_batch_data, arr_batch_labels
 
-dl_train_dataloader = DataLoader(files=lis_train_files, batch_size=1, shuffle_data=True)
-dl_test_dataloader = DataLoader(files=lis_test_files, batch_size=1, shuffle_data=True)
+dl_train = DataLoader(files=lis_files_train, batch_size=args.int_batch_size_train, shuffle_data=True)
+dl_test = DataLoader(files=lis_files_test, batch_size=args.int_batch_size_test, shuffle_data=False)
 
-#next(iter(dl_train_dataloader))
-
-# remember: batch_size = 1 for bold means shape(143,xxx) and for betas means shape(1,xxx)
+str_classifier_loss = "hinge"
+str_classifier_penalty = "l2"
+str_classifier_learning_rate = "optimal"
+sgd_partial = SGDClassifier(loss=str_classifier_loss, penalty=str_classifier_penalty, learning_rate=str_classifier_learning_rate, random_state=args.int_seed, n_jobs=args.int_n_jobs)
  
-# %%
+# %% 
 
-sgd_partial = SGDClassifier(loss="hinge", penalty="l2", learning_rate="optimal" , random_state=42)
+lis_classes_train, lis_classes_coded_train = get_classes_training()
 
-lis_classes = [0,1]  #TODO improve
+get_settings_summary(args=args, int_n_subjects_total=int_n_subjects_total, lis_classes_train = lis_classes_train, pat_results = pat_results_svm)
 
-arr_epochs_train_accuracies = []
-arr_epochs_test_accuracies = []
+print("--- Begin Training -------------------------------------------------------------------------")
+print("")
 
-int_n_train_batches = int(ceil(len(dl_train_dataloader.files) / dl_train_dataloader.batch_size))
-int_n_test_batches = int(ceil(len(dl_test_dataloader.files) / dl_test_dataloader.batch_size))
+int_n_train_batches = int(ceil(len(dl_train.files) / dl_train.batch_size))
+int_n_test_batches = int(ceil(len(dl_test.files) / dl_test.batch_size))
 
-# --- Training ----------------------------------
+dt_now = datetime.now()
 
-for int_epoch in range(int_epochs):
+for int_idx_epoch, int_epoch in enumerate(range(args.int_epochs)):
 
-    str_date_time = datetime.now(tz=timezone.utc).isoformat().replace("T", " ")
+    flo_time_epoch_start = perf_counter()
 
-    flo_time_epoch_start = time()
-    flo_time_training_start = time()
-
-    print(f"Epoch: {int_epoch + 1}/{int_epochs}")
+    print(f"\33[1mEpoch: {int_epoch + 1}/{args.int_epochs}\33[0m")
 
     int_n_train_batch = 1
     int_n_test_batch = 1
 
-    int_format_width = 9
+    # --- Training ------------------------------
 
-    arr_batches_train_accuracies = array([])
-    arr_batches_test_accuracies = array([])
+    flo_time_training_start = perf_counter()
 
-    for train_data_batch, train_labels_batch in dl_train_dataloader:
+    lis_train_trues = []
+    lis_train_preds = []
 
-        if int_epoch == 0:      
+    for train_data_batch, train_labels_batch in dl_train:
 
-            sgd_partial.partial_fit(X=train_data_batch, y=train_labels_batch, classes= lis_classes)
+        if int_epoch == 0 and int_n_train_batch == 1:      
+
+            sgd_partial.partial_fit(X=train_data_batch, y=train_labels_batch, classes= lis_classes_coded_train)
 
         else:
 
             sgd_partial.partial_fit(X=train_data_batch, y=train_labels_batch)
 
-        batch_pred = sgd_partial.predict(X=train_data_batch)
+        train_batch_pred = sgd_partial.predict(X=train_data_batch)
 
-        flo_train_batch_accuracy = accuracy_score(y_true=train_labels_batch, y_pred=batch_pred)
-
-        arr_batches_train_accuracies = append(arr=arr_batches_train_accuracies, values=flo_train_batch_accuracy)
+        lis_train_trues.append(train_labels_batch)
+        lis_train_preds.append(train_batch_pred)
 
         # Progress Bar
-        int_batch_batches_ratio = int(round((int_n_train_batch * int_progress_bar_size)/int_n_train_batches, decimals=1)*10)
-        str_train_progress_bar = "[" + "▌" * int_batch_batches_ratio  + "." * ((int_progress_bar_size*10) - int_batch_batches_ratio) + "]"
-        print(f"  Training Batches:  {f"{int_n_train_batch}/{int_n_train_batches}":>7} " + str_train_progress_bar, end="\r")
+        int_batch_batches_ratio = int(round((int_n_train_batch * args.int_progress_bar_size)/int_n_train_batches, decimals=1)*10)
+        str_train_progress_bar = "[" + "▌" * int_batch_batches_ratio  + "." * ((args.int_progress_bar_size*10) - int_batch_batches_ratio) + "]"
+        print(f"  Training Batches:  {f"{int_n_train_batch}/{int_n_train_batches}":>3} " + str_train_progress_bar, end="\r")
 
         int_n_train_batch += 1
 
-    arr_epochs_train_accuracies = append(arr=arr_epochs_train_accuracies, values=arr_batches_train_accuracies.mean())
+    arr_train_trues = concatenate(lis_train_trues)
+    arr_train_preds = concatenate(lis_train_preds)
 
-    flo_time_training_end = time()
-
+    flo_epoch_train_accuracy = accuracy_score(y_true=arr_train_trues, y_pred=arr_train_preds)
+    flo_epoch_train_balanced_accuracy = balanced_accuracy_score(y_true=arr_train_trues, y_pred=arr_train_preds)
+    flo_epoch_train_precision = precision_score(y_true=arr_train_trues, y_pred=arr_train_preds, average="macro", zero_division=np.nan)
+    flo_epoch_train_recall = recall_score(y_true=arr_train_trues, y_pred=arr_train_preds, average="macro", zero_division=np.nan)
+    flo_epoch_train_f1_score = f1_score(y_true=arr_train_trues, y_pred=arr_train_preds, average="macro", zero_division=np.nan)
+    
+    flo_time_training_end = perf_counter()
+ 
     print("")
     
     # --- Testing -------------------------------
 
-    flo_time_testing_start = time()
+    flo_time_testing_start = perf_counter()
 
-    for test_data_batch, test_labels_batch in dl_test_dataloader:
+    lis_test_trues = []
+    lis_test_preds = []
 
-        batch_pred = sgd_partial.predict(X=test_data_batch)
+    for test_data_batch, test_labels_batch in dl_test:
 
-        flo_test_batch_accuracy = accuracy_score(y_true=test_labels_batch, y_pred=batch_pred)
+        test_batch_pred = sgd_partial.predict(X=test_data_batch)
 
-        arr_batches_test_accuracies = append(arr=arr_batches_test_accuracies, values=flo_test_batch_accuracy)
+        lis_test_trues.append(test_labels_batch)
+        lis_test_preds.append(test_batch_pred)
 
         # Progress Bar
-        int_batch_batches_ratio = int(round((int_n_test_batch * int_progress_bar_size) / int_n_test_batches, decimals=1)*10)
-        str_test_progress_bar = "[" + "▌" * int_batch_batches_ratio + "." * ((int_progress_bar_size*10) - int_batch_batches_ratio) + "]"
-        print(f"  Testing Batches:  {f"{int_n_test_batch}/{int_n_test_batches}":>8} " + str_test_progress_bar, end="\r")   
+        int_batch_batches_ratio = int(round((int_n_test_batch * args.int_progress_bar_size) / int_n_test_batches, decimals=1)*10)
+        str_test_progress_bar = "[" + "▌" * int_batch_batches_ratio + "." * ((args.int_progress_bar_size*10) - int_batch_batches_ratio) + "]"
+        print(f"  Testing Batches:  {f"{int_n_test_batch}/{int_n_test_batches}":>4} " + str_test_progress_bar, end="\r")   
 
         int_n_test_batch += 1
 
-    arr_epochs_test_accuracies= append(arr=arr_epochs_test_accuracies, values=arr_batches_test_accuracies.mean())
+    arr_test_trues = concatenate(lis_test_trues)
+    arr_test_preds = concatenate(lis_test_preds)
 
-    flo_time_testing_end = time()
-    flo_time_epoch_end = time()
+    flo_epoch_test_accuracy = accuracy_score(y_true=arr_test_trues, y_pred=arr_test_preds)
+    flo_epoch_test_balanced_accuracy = balanced_accuracy_score(y_true=arr_test_trues, y_pred=arr_test_preds)
+    flo_epoch_test_precision = precision_score(y_true=arr_test_trues, y_pred=arr_test_preds, average="macro", zero_division=np.nan)
+    flo_epoch_test_recall = recall_score(y_true=arr_test_trues, y_pred=arr_test_preds, average="macro", zero_division=np.nan)
+    flo_epoch_test_f1_score = f1_score(y_true=arr_test_trues, y_pred=arr_test_preds, average="macro", zero_division=np.nan)
 
+    df_results.loc[int_idx_epoch, "Epoch"] = int_epoch + 1
+    df_results.loc[int_idx_epoch, "Accuracy_Train"] = flo_epoch_train_accuracy
+    df_results.loc[int_idx_epoch, "Accuracy_Test"] = flo_epoch_test_accuracy
+    df_results.loc[int_idx_epoch, "Balanced_Accuracy_Train"] = flo_epoch_train_balanced_accuracy
+    df_results.loc[int_idx_epoch, "Balanced_Accuracy_Test"] = flo_epoch_test_balanced_accuracy
+    df_results.loc[int_idx_epoch, "Precision_Train"] = flo_epoch_train_precision
+    df_results.loc[int_idx_epoch, "Precision_Test"] = flo_epoch_test_precision
+    df_results.loc[int_idx_epoch, "Recall_Train"] = flo_epoch_train_recall
+    df_results.loc[int_idx_epoch, "Recall_Test"] = flo_epoch_test_recall
+    df_results.loc[int_idx_epoch, "F1-Score_Train"] = flo_epoch_train_f1_score
+    df_results.loc[int_idx_epoch, "F1-Score_Test"] = flo_epoch_test_f1_score
+
+    # ---------------------------------------------------------------------------------------------
+
+    flo_time_testing_end = perf_counter()
+    flo_time_epoch_end = perf_counter()
+    flo_time_total_end = perf_counter()
+
+    flo_time_total = flo_time_total_end - flo_time_total_start
     flo_time_epoch = flo_time_epoch_end - flo_time_epoch_start
     flo_time_training = flo_time_training_end - flo_time_training_start
     flo_time_testing = flo_time_testing_end - flo_time_testing_start
 
+    # ---------------------------------------------------------------------------------------------
+
+    df_predictions = DataFrame(zip_longest(arr_test_preds, arr_test_trues), columns=["Predicted State", "True State"])
+
+    str_folder_name = f"{dt_now.day}-{dt_now.month}-{dt_now.year}_{dt_now.hour}-{dt_now.minute}-{dt_now.second}_{args.lis_tasks_test[0]}_{int_subjects_train_percent}"
+    pat_results_svm_folder = pat_results_svm/str_folder_name
+
+    if not pat_results_svm_folder.is_dir():
+
+        pat_results_svm_folder.mkdir(parents=True, exist_ok=True)
+
+    str_file_name_results = f"{str_folder_name}_performance.csv"
+    str_file_name_subjects = f"{str_folder_name}_subjects.csv"
+    str_file_name_predictions = f"{str_folder_name}_epoch_{int_epoch + 1}_predictions.csv"
+    str_file_name_model = f"{str_folder_name}_epoch_{int_epoch + 1}_model.pkl"
+    str_file_name_parameters = f"{str_folder_name}_parameters.csv"
+
+    df_results.to_csv(path_or_buf=pat_results_svm_folder/str_file_name_results, index=False)
+    df_subjects.to_csv(path_or_buf=pat_results_svm_folder/str_file_name_subjects, index=False)
+    df_predictions.to_csv(path_or_buf=pat_results_svm_folder/str_file_name_predictions, index=False)
+
+    with open(pat_results_svm_folder/str_file_name_model, "wb") as file_model:
+        dump(sgd_partial, file_model)
+
     print("")
+    print("")
+    print(f"  \33[1mTraining:\33[0m")
+    print(f"    Accuracy: {f"{100*flo_epoch_train_accuracy:.2f}":>9}%")
+    print(f"    Precision: {f"{100*flo_epoch_train_precision:.2f}":>8}%")
+    print(f"    Recall: {f"{100*flo_epoch_train_recall:.2f}":>11}%")
+    print(f"    F1-Score: {f"{100*flo_epoch_train_f1_score:.2f}":>9}%")
+    print("")
+    print(f"  \33[1mTesting:\33[0m")
+    print(f"    Accuracy: {f"{100*flo_epoch_test_accuracy:.2f}":>9}%")
+    print(f"    Precision: {f"{100*flo_epoch_test_precision:.2f}":>8}%")
+    print(f"    Recall: {f"{100*flo_epoch_test_recall:.2f}":>11}%")
+    print(f"    F1-Score: {f"{100*flo_epoch_test_f1_score:.2f}":>9}%")
+    print("")
+    print(f"  \33[1mTime:\33[0m")
+    print(f"    Epoch: {f"{flo_time_epoch:.3f}":>12}s")
+    print(f"    Training: {f"{flo_time_training:.3f}":>9}s")
+    print(f"    Testing: {f"{flo_time_testing:.3f}":>10}s")
+
     print("")
 
-    print(f"  Training Accuracy:  {(arr_epochs_train_accuracies[-1]*100):.2f}%")
-    print(f"  Test Accuracy:  {f"{(arr_epochs_test_accuracies[-1]*100):.2f}":>9}%")
-    print("")
-    print(f"  Time: {flo_time_epoch:.0f}s")
+df_parameters = DataFrame(columns=["Parameter"], index=["Epochs", "Subjects_training", "Subjects_testing", "Batch_size_training", "Batch_size_testing", "Tasks_training", "Tasks_testing", "Categories", "Baseline", "SGD_loss", "SGD_penalty", "SGD_learning_rate", "Random_seed", "n_jobs"])
 
-    print("")
+df_parameters.loc["Epochs", "Parameter"] = args.int_epochs
+df_parameters.loc["Subjects_training", "Parameter"] = args.int_n_subjects_train
+df_parameters.loc["Subjects_testing", "Parameter"] = args.int_n_subjects_test
+df_parameters.loc["Batch_size_training", "Parameter"] = args.int_batch_size_train
+df_parameters.loc["Batch_size_testing", "Parameter"] = args.int_batch_size_test
+df_parameters.loc["Tasks_training", "Parameter"] = args.lis_tasks_train
+df_parameters.loc["Tasks_testing", "Parameter"] = args.lis_tasks_test
+df_parameters.loc["Categories", "Parameter"] = len(lis_classes_train)
+df_parameters.loc["Baseline", "Parameter"] = 100*(1/len(lis_classes_train))
+df_parameters.loc["SGD_loss", "Parameter"] = str_classifier_loss
+df_parameters.loc["SGD_penalty", "Parameter"] = str_classifier_penalty
+df_parameters.loc["SGD_learning_rate", "Parameter"] = str_classifier_learning_rate
+df_parameters.loc["Random_seed", "Parameter"] = args.int_seed
+df_parameters.loc["n_jobs", "Parameter"] = args.int_n_jobs
+
+df_parameters.to_csv(path_or_buf=pat_results_svm_folder/str_file_name_parameters, index=True)
+
+print(f"    Total: {f"{flo_time_total:.3f}":>10}s")
+print("")
+
+# %%
+
+
 
 
 # --- Plotting ------------------------------------------------------------------------------------
-
-
 
 # subjects training
 # subjects test
@@ -277,10 +286,5 @@ for int_epoch in range(int_epochs):
 #TODO in paper: discuss fit vs partial fit, performance, memory, time and partial fit as a way to analyze large fmri datasets
 #TODO reflect on temporal autocorrelation in the paper, what is it?, how does it relate to fMRI? what does it mean for classifiers (SVM and deep learning), prolem if you "rip" subject data appart
 
-
-# %%
-
-# detrending ? yes/no?
-
-# svm whole brain vs ROI
-
+#TODO meantion, explain and discuss that batches in training are less well trained and the start and better trained at the end -> mean could be misleading
+#TODO explain metrics + balanced accuracy vs accuracy

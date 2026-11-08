@@ -1,42 +1,36 @@
 
 # %% --- Load Modules -----------------------------------------------------------------------------
 
-from captum.attr import LRP
 from matplotlib.pyplot import show, subplots
 from nibabel import __version__ as nib_version
 from nilearn import __version__ as nil_version
-from numpy import arange, ceil, mean, round, __version__ as np_version
+from nilearn.image import load_img
+from nilearn.masking import unmask
+from numpy import arange, ceil, mean, load, round, __version__ as np_version
 from pandas import __version__ as pd_version
 from platform import python_version
 from psutil import virtual_memory
-from pathlib import Path
 from sklearn import __version__ as skl_version
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from sklearn.model_selection import train_test_split
 from time import time
 from datetime import datetime
 import torch
-from torch import __version__ as tor_version
+from torch import argmax, float, long, tensor, __version__ as tor_version, flatten
 from torch.cuda import is_available
-from torch.nn import BCEWithLogitsLoss, BatchNorm3d, Conv3d, Dropout3d, LazyLinear, Linear, Module
+from torch.nn import AdaptiveAvgPool3d, CrossEntropyLoss, BatchNorm3d, ReLU, Conv3d, Dropout3d, LazyLinear, Linear, Softmax, Module, Sequential, Flatten
 from torch.nn.functional import max_pool3d, relu
 from torch.utils.data import DataLoader, Dataset
 
-from _MT_functions import get_subjects, handle_logs, progress_bar
+from _MT_functions import get_arguments, get_classes_training, get_subjects, get_split_files, get_settings_summary, handle_logs, progress_bar
 
 device = torch.device("cuda" if is_available() else "cpu")
 
-# %% ---
 
-pat_data_path = Path.cwd().parent/"data"
-str_data_type = "betas"
-int_n_epochs = 20
-flo_train_test_ratio = 0.8
-int_batch_size = 12
-flo_learning_rate = 0.001
-flo_dropout = 0.2
-int_random_seed = 42
-boo_verbose = False
+# %% --- Handle Arguments -------------------------------------------------------------------------
+
+args = get_arguments()
+#args.int_batch_size_train = 1
+#args.lis_tasks_train = ["EMOTION"]
 
 # TODO make sure int_batch_size=12 its correct
 # TODO investigate test > train issue
@@ -45,64 +39,27 @@ boo_verbose = False
 # TODO save weights in each epoch in seperate folder
 # TODO check grammar of all prints & and decide what is boo_verbose and what not
 
-
-# %% ---
-
-#from argparse import ArgumentParser
-
-#ap = ArgumentParser()
-
-#ap.add_argument("-data-path", default="")
-#ap.add_argument("-epochs", default=50)
-#ap.add_argument("-train-test-ratio", default=0.8)
-#ap.add_argument("-batch-size", default=12)
-#ap.add_argument("-learning_rate", default=0.001)
-#ap.add_argument("-dropout", default=0.2)
-#ap.add_argument("-random-seed", default=42)
-
-#args = ap.parse_args()
-
 # %% ----------------------------------------------------------------------------------------------
 
-lis_subjects = get_subjects(data_path=pat_data_path)
+lis_subjects = get_subjects(pat_data=args.pat_data)
+int_n_subjects_total = len(lis_subjects)
+
+img_mask = load_img(args.pat_data/"task-ALL_space-MNI152NLin6Asym_res-2_desc-preproc_brain_mask_intersect.nii.gz")
+
+lis_files_train, lis_files_test, lis_subjects_train, lis_subjects_test = get_split_files()
+
+lis_classes_train, lis_classes_coded_train = get_classes_training()
 
 dic_log_epochs = {}
 dic_log_run = {}
 dic_log_subjects = {}
 
-pat_log_path = pat_data_path.parent/"logs"
-lis_log_files = [x for x in pat_log_path.iterdir() if x.name.endswith("run.csv")]
-int_run_id = len(lis_log_files) + 1
+pat_log_path = args.pat_data.parent/"logs"
+#lis_log_files = [x for x in pat_log_path.iterdir() if x.name.endswith("run.csv")]
+#int_run_id = len(lis_log_files) + 1
 
 str_date = datetime.now().strftime("%d.%m.%Y")
 str_time = datetime.now().strftime("%H:%M:%S")
-
-# %% --------------------------------------------------------------------------
-
-lis_subjects_train, lis_subjects_test = train_test_split(lis_subjects, train_size=flo_train_test_ratio, shuffle=True, random_state=42)
-
-int_len_subjects_total = len(lis_subjects)
-int_len_subjects_train = len(lis_subjects_train)
-int_len_subjects_test = len(lis_subjects_test)
-
-lis_files_train = []
-lis_files_test = []
-
-for str_subject in lis_subjects:
-
-    pat_subject_betas_path = pat_data_path/str_subject/"func"/"betas"
-    lis_subject_beta_files = [x.name for x in pat_subject_betas_path.iterdir() if x.name.endswith(".pt")]
-
-    if str_subject in lis_subjects_train:
-
-        lis_files_train.append(lis_subject_beta_files)
-    
-    if str_subject in lis_subjects_test:
-
-        lis_files_test.append(lis_subject_beta_files)
-
-lis_files_train = [x for sublist in lis_files_train for x in sublist]
-lis_files_test = [x for sublist in lis_files_test for x in sublist]
 
 # %% --- Build Dataset ---------------------------------------------------------------------------
 
@@ -118,115 +75,120 @@ class Custom_Dataset(Dataset):
     
     def __getitem__(self, idx):
 
-        str_file = self.files[idx]
-        str_subject = str_file.split("_")[0]
+        npz_data = load(self.files[idx])
+        img_file = unmask(X=npz_data["data"], mask_img=img_mask)
 
-        str_file_path = pat_data_path/f"{str_subject}"/"func"/"betas"/str_file
+        ten_data = tensor(img_file.get_fdata(), dtype=float)
+        ten_data = ten_data.permute(3,0,1,2)
+        #ten_data = ten_data.unsqueeze(0)
 
-        file = torch.load(f=str_file_path, weights_only=False)
+        labels = tensor(npz_data["labels"], dtype=long)
 
-        tensor = file["data"].unsqueeze(0)
-        label = file["label"].float()
-
-        return tensor, label
+        return ten_data, labels
 
 # %% --- Setup Dataloaders -----------------------------------------------------------------------
 
 train_dataset = Custom_Dataset(lis_files_train)
 test_dataset = Custom_Dataset(lis_files_test)
 
-train_dataloader = DataLoader(dataset=train_dataset, batch_size=int_batch_size, shuffle=True, generator=torch.Generator().manual_seed(int_random_seed), drop_last=False)
-test_dataloader = DataLoader(dataset=test_dataset, batch_size=int_batch_size, shuffle=False)
+train_dataloader = DataLoader(dataset=train_dataset, batch_size=args.int_batch_size_train, shuffle=True, generator=torch.Generator().manual_seed(args.int_seed), drop_last=False)
+test_dataloader = DataLoader(dataset=test_dataset, batch_size=args.int_batch_size_test, shuffle=False)
 
 # %% --- Setup the CNN ----------------------------------------------------------------------------
 
-class cla_cnn_3D(Module):        # nn.Module?
-    def __init__(self):             # self?
-        super().__init__()          # super()?
+class cla_cnn_3D(Module):
+    def __init__(self):
+        super().__init__()
 
-        self.conv01 = Conv3d(in_channels=1, out_channels=8, kernel_size=(3,3,3), stride=1, padding=1)
-        self.conv02 = Conv3d(in_channels=8, out_channels=16, kernel_size=(3,3,3), stride=1, padding=1)
-        self.conv03 = Conv3d(in_channels=16, out_channels=32, kernel_size=(3,3,3), stride=1, padding=1)
-        self.conv04 = Conv3d(in_channels=32, out_channels=64, kernel_size=(3,3,3), stride=1, padding=1)
-        self.conv05 = Conv3d(in_channels=64, out_channels=128, kernel_size=(3,3,3), stride=1, padding=1)
-        self.conv06 = Conv3d(in_channels=128, out_channels=256, kernel_size=(3,3,3), stride=1, padding=1)
+        self.conv01 = Conv3d(in_channels=1,   out_channels=8,   kernel_size=(3,3,3), stride=1, padding=1)
+        self.conv02 = Conv3d(in_channels=8,   out_channels=8,   kernel_size=(3,3,3), stride=1, padding=1)
+        self.conv03 = Conv3d(in_channels=8,   out_channels=8,   kernel_size=(3,3,3), stride=2, padding=1)
+        self.conv04 = Conv3d(in_channels=8,   out_channels=8,   kernel_size=(3,3,3), stride=1, padding=1)
+        self.conv05 = Conv3d(in_channels=8,   out_channels=16,  kernel_size=(3,3,3), stride=2, padding=1)
+        self.conv06 = Conv3d(in_channels=16,  out_channels=16,  kernel_size=(3,3,3), stride=1, padding=1)
+        self.conv07 = Conv3d(in_channels=16,  out_channels=32,  kernel_size=(3,3,3), stride=2, padding=1)
+        self.conv08 = Conv3d(in_channels=32,  out_channels=32,  kernel_size=(3,3,3), stride=1, padding=1)
+        self.conv09 = Conv3d(in_channels=32,  out_channels=64,  kernel_size=(3,3,3), stride=2, padding=1)
+        self.conv10 = Conv3d(in_channels=64,  out_channels=64,  kernel_size=(3,3,3), stride=1, padding=1)
+        self.conv11 = Conv3d(in_channels=64,  out_channels=128, kernel_size=(3,3,3), stride=2, padding=1)
+        self.conv12 = Conv3d(in_channels=128, out_channels=128, kernel_size=(3,3,3), stride=1, padding=1)
 
-        self.drop01 = Dropout3d(p=flo_dropout)
+        self.dropout = Dropout3d(0.2)
 
-        self.batch01 = BatchNorm3d(num_features=8)           # Batchnnorm??
-        self.batch02 = BatchNorm3d(num_features=16)
-        self.batch03 = BatchNorm3d(num_features=32)
-        self.batch04 = BatchNorm3d(num_features=64)
-        self.batch05 = BatchNorm3d(num_features=128)
-        self.batch06 = BatchNorm3d(num_features=256)
+        self.batchnorm8 =   BatchNorm3d(num_features=8)
+        self.batchnorm16 =  BatchNorm3d(num_features=16)
+        self.batchnorm32 =  BatchNorm3d(num_features=32)
+        self.batchnorm64 =  BatchNorm3d(num_features=64)
+        self.batchnorm128 = BatchNorm3d(num_features=128)
 
-        self.fc01 = LazyLinear(out_features=256)
-        self.fc02 = Linear(in_features=256, out_features=1)
-    
-    def forward(self, x):               # make into dictionary?
+        self.softmmax = Softmax(dim=1)
 
-        kernel_size = (2,2,2)           
-        
+        self.adaptiveavgepool3d = AdaptiveAvgPool3d(output_size=(1,1,1))
+
+        self.fc01 = LazyLinear(out_features=128)
+        self.fc02 = Linear(in_features=128, out_features=len(lis_classes_train))
+            
+    def forward(self, x):
+
         x = self.conv01(x)
-        x = self.batch01(x)                                     # why this order?
         x = relu(input=x)
-        x = max_pool3d(input=x, kernel_size=kernel_size)      # max-pool vs mean-pool?
-        x = self.drop01(x)
+        x = self.dropout(x)
+        x = self.batchnorm8(x)
 
         x = self.conv02(x)
-        x = self.batch02(x)
         x = relu(input=x)
-        x = max_pool3d(input=x, kernel_size=kernel_size)
-        x = self.drop01(x)
+        x = self.dropout(x)
+        x = self.batchnorm8(x)
 
         x = self.conv03(x)
-        x = self.batch03(x)
         x = relu(input=x)
-        x = max_pool3d(input=x, kernel_size=kernel_size)
-        x = self.drop01(x)
+        x = self.dropout(x)
+        x = self.batchnorm8(x)
 
         x = self.conv04(x)
-        x = self.batch04(x)
         x = relu(input=x)
-        x = max_pool3d(input=x, kernel_size=kernel_size)
-        x = self.drop01(x)
+        x = self.dropout(x)
+        x = self.batchnorm8(x)
 
         x = self.conv05(x)
-        x = self.batch05(x)
         x = relu(input=x)
-        x = max_pool3d(input=x, kernel_size=kernel_size)
-        x = self.drop01(x)
+        x = self.dropout(x)
+        x = self.batchnorm16(x)
 
         x = self.conv06(x)
-        x = self.batch06(x)
         x = relu(input=x)
-        x = max_pool3d(input=x, kernel_size=kernel_size)
-        x = self.drop01(x)
+        x = self.dropout(x)
+        x = self.batchnorm16(x)
 
-        x = torch.flatten(x, 1)         # ??
+        x = self.adaptiveavgepool3d(x)
+
+        x = flatten(input=x, start_dim= 1)
         x = relu(self.fc01(x))
         x = self.fc02(x)
-        
+
         return x
 
 model = cla_cnn_3D().to(device=device)
-loss_func = BCEWithLogitsLoss()          # BCELoss vs Crossentropyloss vs. other?
-optimizer = torch.optim.Adam(params=model.parameters(), lr=flo_learning_rate)       # Adam vs others
+loss_func = CrossEntropyLoss()
 
+optimizer = torch.optim.Adam(params=model.parameters(), lr=args.flo_learning_rate)       # Adam vs others
 
+# %% ----------------------------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------------------------
+get_settings_summary(args=args, int_n_subjects_total=int_n_subjects_total, lis_classes_train=lis_classes_train)
 
+print(" --- Begin Training ------------------------------------------------------------------------")
+print("")
 
-ten_train_loss = torch.zeros(int_n_epochs)
-ten_train_acc = torch.zeros(int_n_epochs)
+ten_train_loss = torch.zeros(args.int_epochs)
+ten_train_acc = torch.zeros(args.int_epochs)
 
-ten_test_loss = torch.zeros(int_n_epochs)
-ten_test_acc = torch.zeros(int_n_epochs)
+ten_test_loss = torch.zeros(args.int_epochs)
+ten_test_acc = torch.zeros(args.int_epochs)
 
 int_n_batches = int(ceil(len(train_dataset.files) / train_dataloader.batch_size))
 
-for int_epoch in (range(int_n_epochs)):
+for int_epoch in (range(args.int_epochs)):
 
     flo_epoch_begin = time()
     flo_train_begin = time()
@@ -243,10 +205,9 @@ for int_epoch in (range(int_n_epochs)):
 
     for x,y in train_dataloader:
 
+        x = x.permute(1,0,2,3,4)
         x = x.to(device=device)
-
-        y = y.to(device=device)
-        y = y.reshape(12,1)
+        y = y.long().reshape(-1).to(device=device)
 
         y_hat = model(x)
         loss = loss_func(y_hat, y)
@@ -255,15 +216,16 @@ for int_epoch in (range(int_n_epochs)):
         loss.backward()    # ??
         optimizer.step()  # ??
 
-        pred = (y_hat > 0).long()
-        matches = (pred == y).long()
-        acc = matches.float().mean()
+        pred = argmax(input=y_hat, dim=1)
+        matches = (pred == y).float()
+
+        acc = matches.mean()
 
         lis_train_batch_loss.append(loss.item())
         lis_train_batch_acc.append(acc.item())
 
         str_epoch_progress_bar = progress_bar(int_n_train_batch=int_n_batch, int_n_train_batches=int_n_batches, int_progress_bar_size=3, int_format_width=4)
-        print(f"Epoch: {int_epoch + 1}/{int_n_epochs}, Batch: {f"{int_n_batch}/{int_n_batches}":>5} {str_epoch_progress_bar}", end="\r")
+        print(f"Epoch: {int_epoch + 1}/{args.int_epochs}, Batch: {f"{int_n_batch}/{int_n_batches}":>5} {str_epoch_progress_bar}", end="\r")
 
         int_n_batch +=1
     
@@ -295,17 +257,18 @@ for int_epoch in (range(int_n_epochs)):
 
         for x,y in test_dataloader:
 
+            x = x.permute(1,0,2,3,4)
             x = x.to(device)
 
-            y = y.reshape(12,1).float()
-            y = y.to(device)
+            y = y.long().reshape(-1).to(device=device)
 
             y_hat = model(x)
             loss = loss_func(y_hat, y)
 
-            pred = (y_hat > 0).long()
-            matches = (pred == y).long()
-            acc = matches.float().mean()
+            pred = argmax(input=y_hat, dim=1)
+            matches = (pred == y).float()
+
+            acc = matches.mean()
 
             lis_test_batch_loss.append(loss.item())
             lis_test_batch_acc.append(acc.item())
@@ -366,20 +329,19 @@ for int_epoch in (range(int_n_epochs)):
 #str_cpu, str_cpu_driver, str_gpu, str_gpu_driver, str_ram, str_ram_driver, str_mainboard, str_mainboard_driver = get_hardware()
 #TODO add devices + drivers
 
-dic_log_run = {"Run-ID":int_run_id,
+dic_log_run = {"Run-ID":"",
             "Date":str_date,
             "Time":str_time,
-            "Epochs":int_n_epochs, 
-            "Learning_Rate":flo_learning_rate,
+            "Epochs":args.int_epochs, 
+            "Learning_Rate":args.flo_learning_rate,
             "Loss_Function":loss_func,
             "Optimizer":optimizer,
-            "Random_Seed":int_random_seed,
-            "Batch_Size":int_batch_size,
-            "Dropout":flo_dropout,
-            "Train_Test_Ratio":flo_train_test_ratio,
-            "Subject_Number_Total":int_len_subjects_total,
-            "Subject_Number_Training":int_len_subjects_train,
-            "Subject_Number_Test":int_len_subjects_test,
+            "Random_Seed":args.int_seed,
+            "Batch_Size":args.int_batch_size_train,
+            "Dropout":args.flo_dropout,
+            "Subject_Number_Total":int_n_subjects_total,
+            "Subject_Number_Training":args.int_n_subjects_train,
+            "Subject_Number_Test":args.int_n_subjects_test,
             #"CPU":str_cpu,
             #"GPU":str_gpu,
             #"RAM":str_ram,
@@ -427,7 +389,7 @@ show()
     
 # ---------------------------------------------------------------------------------------------
 
-handle_logs(str_data_path=pat_data_path.parent, dic_log_epochs=dic_log_epochs, dic_log_run=dic_log_run, dic_log_subjects=dic_log_subjects)
+handle_logs(str_data_path=args.pat_data.parent, dic_log_epochs=dic_log_epochs, dic_log_run=dic_log_run, dic_log_subjects=dic_log_subjects)
 
 # %%
 
@@ -440,10 +402,7 @@ handle_logs(str_data_path=pat_data_path.parent, dic_log_epochs=dic_log_epochs, d
 #    flo_dropout=0.2,
 #    int_random_seed=42)
 
-# %%
 
-#(net.state_dict())
 
-x = next(iter(train_dataloader))
-x[0].shape
-x[1].shape
+
+

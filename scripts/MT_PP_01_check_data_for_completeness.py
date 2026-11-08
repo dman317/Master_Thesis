@@ -12,7 +12,7 @@ from _MT_functions import get_longest_file_name
 # %% --- Handle Arguments -------------------------------------------------------------------------
 
 ap = argparse.ArgumentParser(description="???") #TODO
-ap.add_argument("--data", required=False, default=Path("../data/"), help=f"???")
+ap.add_argument("--data", required=False, default=Path(__file__).parent.parent/"data", help=f"???")
 ap.add_argument("--remove", required=False, default=False, help="???")
 
 args = ap.parse_args()
@@ -129,7 +129,8 @@ lis_files = ['task-WM_run-LR_desc-EV_0bk_body.txt',
 
 str_longest_file_name, int_len_longest_file_name = get_longest_file_name(lis_files=lis_files)
 
-lis_subjects_incomplete = []
+lis_str_subjects_incomplete = []
+lis_pat_subjects_incomplete = []
 
 for int_subject_i, pat_subject in enumerate(lis_subjects, start=1):
 
@@ -151,39 +152,27 @@ for int_subject_i, pat_subject in enumerate(lis_subjects, start=1):
 
             print(f"{str_file:<{int_format_width}} \033[91mFILE MISSING\033[0m")
 
-            lis_subjects_incomplete.append(pat_subject)
+            lis_pat_subjects_incomplete.append(pat_subject)
+            lis_str_subjects_incomplete.append(pat_subject.name)
 
     print("")
 
-lis_unique_subjects_incomplete = unique(lis_subjects_incomplete)
+lis_unique_str_subjects_incomplete = unique(lis_str_subjects_incomplete)
+lis_unique_pat_subjects_incomplete = unique(lis_pat_subjects_incomplete)
 
-print(f"Subjects with incomplete data: {len(lis_unique_subjects_incomplete)}")
-print(f"Subjects: {lis_unique_subjects_incomplete}")
+print(f"Subjects total: {len(lis_subjects)}")
+print(f"Subjects with incomplete data: {len(lis_unique_str_subjects_incomplete)}")
+print(f"Subjects: {lis_unique_str_subjects_incomplete}")
 print("")
 
 
 # %%
 
-if bool_remove and lis_subjects_incomplete:
+if bool_remove and lis_pat_subjects_incomplete:
 
-    str_input = input("Are you sure you want to delete all subjects with incomplete data? This can not be undone and you have to download their data again, if you need it later. (y/n)")
+    for pat_subject in lis_unique_pat_subjects_incomplete:
 
-    bool_valid_input = str_input in ["y", "n"]
+        rmtree(pat_subject)
 
-    while not bool_valid_input:
-
-        print("Invalid input! Use 'y' for 'yes' or 'n' for 'no!")
-
-        str_input = input("Are you sure you want to delete all subjects with incomplete data? This can not be undone and you have to download their data again, if you need it later. (y/n)")
-
-        bool_valid_input = str_input in ["y", "n"]
-
-    if str_input == "y":
-
-        for pat_subject in lis_unique_subjects_incomplete:
-
-            rmtree(pat_subject)
-
-        print("")
-        print("All subjects with incomplete data have been deleted.")
-
+    print("All subjects with incomplete data have been deleted.")
+    print("")
